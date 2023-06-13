@@ -1,42 +1,55 @@
 const http = require('http');
 const url  = require('url');
 const net = require('net');
-const iconv = require('iconv-lite');
-const { isUint8Array } = require('util/types');
-const { response } = require('express');
 
-const toArrayBuffer = (buffer) => {
-    const arrayBuffer = new ArrayBuffer(buffer.length);
-    const view = new Uint8Array(arrayBuffer);
-    for (let i = 0; i < buffer.length; ++i) {
-      view[i] = buffer[i];
+var ESTIMATED_TIME = 30 * 60;
+const TOTAL_BYTES = 38471;
+var PROXY_BPS = 1;
+const TOTAL_BODY_BYTES = 37257;
+const TOTAL_HEADER_BYTES = TOTAL_BYTES - TOTAL_BODY_BYTES;
+const DELAY_PER_BYTE = 0;
+
+var mutex = false;
+
+const sleep = (second) => new Promise(resolve => setTimeout(resolve, second * 1000));
+const mutexAwait = async () => {
+    while(mutex) {
+        await sleep(0.1);
     }
-    return arrayBuffer;
+    mutex = true;
 }
 
+const mutexRelease = () => mutex = false;
+
+const writeSocketSlowly = async (socket, buffer) => {
+    let i = 0;
+    while(buffer.length > i) {
+        socket.write(buffer.slice(i, i + 1));
+        await sleep(DELAY_PER_BYTE);
+        i++;
+    }
+    // TOTAL_BYTES += buffer.length;
+    // console.debug(`TOTAL_BYTES: ${TOTAL_BYTES}`);
+}
+    
+
 // http proxy server
-const proxy = http.createServer((req, res) => {
-    req.setEncoding(null);
-    req.setEncoding('binary');
+const proxy = http.createServer(async (req, res) => {
+
+    await mutexAwait();
+
     console.log('proxying ' + req.url);
 
     const serverUrl = url.parse(req.url);
+    const resSocket = res.socket;
     
     // proxy logic
-    const cliSocket = req.socket;
     const proxySocket = net.connect(80, 'abehiroshi.la.coocan.jp', async () => {
-        const sleep = (second) => new Promise(resolve => setTimeout(resolve, second * 1000));
+        
         // proxy -> client
         // proxySocket.pipe(cliSocket);
 
-        // レスポンスコードとヘッダを送信
-        // res.writeHead(200, {
-        //     'Content-Type': 'text/html; charset=SJIS',
-        //     'Transfer-Encoding': 'chunked'
-        // });
-
-        let responseStream = '';
-        let isOpen = true;
+        // HPからのレスポンスをawaitで待つ
         const chunks = await new Promise((resolve, reject) => {
             const chunks = []
             proxySocket.on('data', (chunk) => chunks.push(Uint8Array.from(chunk)));
@@ -46,25 +59,17 @@ const proxy = http.createServer((req, res) => {
 
         const buffer = Buffer.concat(chunks);
         
-        console.log(buffer.toString());
+        console.debug(buffer.toString());
 
-        // proxySocket.on('data', async (chunk) => {
-        //     responseStream += chunk;
-        //     // let c = '';
-        // })
-
-
-        let chara = '';
+        // レスポンスボディの先頭にあるヘッダーとボディを分離する
         // 一文字ずつ処理する
-        // console.debug(iconv.decode(buffer, 'Shift_JIS'));
-        // const rawResponseArray = iconv.decode(buffer, 'Shift_JIS').toString().split('\r\n\r\n');
         const rawResponseArray = Uint8Array.from(buffer);
         let lastCharIsCR = false;
         let lastCharIsLF = false;
         let lastCharIsCRLF = false;
         let lastCharIsCRLFCRLF = false;
-        let delimiterCount = 0;
-        
+
+        let delimiterCount = 0;        
         rawResponseArray.forEach((c) => {
             if (lastCharIsCRLFCRLF) {
                 return;
@@ -91,22 +96,8 @@ const proxy = http.createServer((req, res) => {
             lastCharIsLF = false;
             lastCharIsCRLF = false;
         });
-        let responseBody = buffer.slice(delimiterCount);
-        console.debug(responseBody);
-
-        // console.debug(rawResponseArray);
-        // console.debug(Uint8Array.from(buffer.slice(0, delimiterCount + 1)));
-        // let abeSiteResponseHead = '';
-        // Uint16Array.from(buffer.slice(0, delimiterCount + 1)).forEach((c) => {
-        //     //console.debug(c);
-        //     // int8から文字列に変換
-        //     chara = String.fromCharCode(c);
-        //     abeSiteResponseHead += chara;
-        // });
-        // console.log(abeSiteResponseHead.toString());
 
         const abeSiteResponseHead = buffer.toString('latin1').split('\r\n\r\n')[0];
-        // const abeSiteBody = rawResponseArray[1];
 
         // ヘッダーを転送
         const headers = {};
@@ -125,46 +116,45 @@ const proxy = http.createServer((req, res) => {
             headers[line.split(': ')[0]] = line.split(': ')[1];
         });
 
-        console.log(headers);
-        //res.writeHead(resCode, headers);
+        console.debug(headers);
+        
+        // res.writeHead(resCode, headers);
+        // resSocket.write(`HTTP/1.1 ${resCode} ${headers['Server']}\r\n`);
+        await writeSocketSlowly(resSocket, Buffer.from(`HTTP/1.1 ${resCode} ${headers['Server']}\r\n`));
+        for (const h in headers) {
+            // resSocket.write(`${h}: ${headers[h]}\r\n`);
+            await writeSocketSlowly(resSocket, Buffer.from(`${h}: ${headers[h]}\r\n`));
+        }
+        await writeSocketSlowly(resSocket, Buffer.from('\r\n'));
+        // resSocket.write('\r\n');
 
-        // let responseString = abeSiteBody.split('');
-        console.log(responseBody.length);
-        let i = 0;
-        while(responseBody.length > i) {
-            res.write(responseBody.slice(i, i + 1));
-            //console.log(responseBody.slice(i, i + 1));
-            //await sleep(0.0001);
-            i += 1;
-        };
-        res.end();
+        // ヘッダーの後ろにあるボディを取得
+        const responseBody = buffer.slice(delimiterCount);
+        console.debug(responseBody);
+        console.debug(responseBody.length);
+        
+        // レスポンスボディを一文字ずつ転送
+        await writeSocketSlowly(resSocket, responseBody);
+        // let i = 0;
+        // while(responseBody.length > i) {
+        //     resSocket.write(responseBody.slice(i, i + 1));
+        //     // console.debug(responseBody.slice(i, i + 1));
+        //     // await sleep(0.0001);
+        //     i += 1;
+        // };
+        resSocket.end();
+
+        mutexRelease();
         
         // http://abehiroshi.la.coocan.jp
-        // proxySocket.on('end', async () => {
-        
-        //     // isOpen = false;
-        //     while(responseStream !== '') {
-        //         // if (!isOpen) {
-        //         //     break;
-        //         // }
-        //         // 一文字ずつ処理する
-        //         res.write(responseStream[0]);
-        //         //res.write("\n");
-        //         console.log(responseStream[0]);
-        //         responseStream = responseStream.slice(1);
-        //         await sleep(0.001);
-        //     }
-        //     // res.end();
-        // });  
     }).on('error', (err) => {
-        console.log(err);
+        console.debug(err);
         // res.end();
         
     }).on('timeout', (err) => {
-        console.log(err);
+        console.debug(err);
         // res.end();
     });
-    // proxySocket.setEncoding('latin1');
 
     // client -> proxy
     proxySocket.write(`${req.method} ${serverUrl.path} HTTP/${req.httpVersion}\r\n`);
