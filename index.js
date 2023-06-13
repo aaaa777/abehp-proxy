@@ -2,16 +2,27 @@ const http = require('http');
 const url  = require('url');
 const net = require('net');
 
-var ESTIMATED_TIME = 30 * 60;
+
 const TOTAL_BYTES = 38471;
-var PROXY_BPS = 1;
+const TOTAL_BITS = TOTAL_BYTES * 8;
 const TOTAL_BODY_BYTES = 37257;
 const TOTAL_HEADER_BYTES = TOTAL_BYTES - TOTAL_BODY_BYTES;
-const DELAY_PER_BYTE = 0;
 
+var ESTIMATED_TIME_MSEC = 0.5 * 60 * 1000;
+var ESTIMATED_TIME_SEC = ESTIMATED_TIME_MSEC / 1000;
+const PROXY_BPMS = TOTAL_BITS / ESTIMATED_TIME_MSEC;
+const PROXY_MSPB = ESTIMATED_TIME_MSEC / TOTAL_BITS;
+
+var DELAY_PER_BYTE = PROXY_MSPB * 8;
 var mutex = false;
 
-const sleep = (second) => new Promise(resolve => setTimeout(resolve, second * 1000));
+console.info('[Proxy] ESTIMATED_TIME_MSEC set: ' + ESTIMATED_TIME_MSEC);
+console.info('[Proxy] DELAY_PER_BYTE set: ' + DELAY_PER_BYTE);
+console.info('[Proxy] Proxy virtual bps is about: ' + Math.round((TOTAL_BYTES * 41 * 8) / ESTIMATED_TIME_SEC) + ' bits/sec');
+
+
+const sleep = (second) => sleepMsec(second * 1000);
+const sleepMsec = (msec) => new Promise(resolve => setTimeout(resolve, msec));
 const mutexAwait = async () => {
     while(mutex) {
         await sleep(0.1);
@@ -21,11 +32,17 @@ const mutexAwait = async () => {
 
 const mutexRelease = () => mutex = false;
 
-const writeSocketSlowly = async (socket, buffer) => {
+
+const writeSocketSlowly = async (socket, buffer, callback) => {
     let i = 0;
     while(buffer.length > i) {
         socket.write(buffer.slice(i, i + 1));
-        await sleep(DELAY_PER_BYTE);
+        console.debug(`socket write: ${buffer.slice(i, i + 1)}`);
+        await sleepMsec(DELAY_PER_BYTE);
+        if(callback()) {
+            console.log('session aborted');
+            return; 
+        }
         i++;
     }
     // TOTAL_BYTES += buffer.length;
@@ -35,7 +52,11 @@ const writeSocketSlowly = async (socket, buffer) => {
 
 // http proxy server
 const proxy = http.createServer(async (req, res) => {
-
+    if(req.url === 'http://abehiroshi.la.coocan.jp/menu.htm')
+        await sleep(2);
+    // if(req.url === 'http://abehiroshi.la.coocan.jp/.htm')
+    //     await sleep(1);
+        
     await mutexAwait();
 
     console.log('proxying ' + req.url);
@@ -46,6 +67,10 @@ const proxy = http.createServer(async (req, res) => {
     // proxy logic
     const proxySocket = net.connect(80, 'abehiroshi.la.coocan.jp', async () => {
         
+        let reqSocketStat = false;
+        const isReqSocketEnd = () => reqSocketStat;
+        req.socket.on('end', () => reqSocketStat = true);
+
         // proxy -> client
         // proxySocket.pipe(cliSocket);
 
@@ -120,12 +145,12 @@ const proxy = http.createServer(async (req, res) => {
         
         // res.writeHead(resCode, headers);
         // resSocket.write(`HTTP/1.1 ${resCode} ${headers['Server']}\r\n`);
-        await writeSocketSlowly(resSocket, Buffer.from(`HTTP/1.1 ${resCode} ${headers['Server']}\r\n`));
+        await writeSocketSlowly(resSocket, Buffer.from(`HTTP/1.1 ${resCode} ${headers['Server']}\r\n`), isReqSocketEnd);
         for (const h in headers) {
             // resSocket.write(`${h}: ${headers[h]}\r\n`);
-            await writeSocketSlowly(resSocket, Buffer.from(`${h}: ${headers[h]}\r\n`));
+            await writeSocketSlowly(resSocket, Buffer.from(`${h}: ${headers[h]}\r\n`), isReqSocketEnd);
         }
-        await writeSocketSlowly(resSocket, Buffer.from('\r\n'));
+        await writeSocketSlowly(resSocket, Buffer.from('\r\n'), isReqSocketEnd);
         // resSocket.write('\r\n');
 
         // ヘッダーの後ろにあるボディを取得
@@ -134,7 +159,7 @@ const proxy = http.createServer(async (req, res) => {
         console.debug(responseBody.length);
         
         // レスポンスボディを一文字ずつ転送
-        await writeSocketSlowly(resSocket, responseBody);
+        await writeSocketSlowly(resSocket, responseBody, isReqSocketEnd);
         // let i = 0;
         // while(responseBody.length > i) {
         //     resSocket.write(responseBody.slice(i, i + 1));
@@ -159,25 +184,45 @@ const proxy = http.createServer(async (req, res) => {
     // client -> proxy
     proxySocket.write(`${req.method} ${serverUrl.path} HTTP/${req.httpVersion}\r\n`);
     for (const h in req.headers) {
+        if(h.startsWith('If-Modified-Since')) {
+            continue;
+        }
+        if(h.startsWith('If-None-Match')) {
+            continue;
+        }
+        if(h.startsWith('Chache-Control')) {
+            proxySocket.write(`${h}: ${req.headers[h]}`)
+        }
         proxySocket.write(`${h}: ${req.headers[h]}\r\n`);
     }
     proxySocket.write('\r\n');
 });
 
 const pacServer = http.createServer((req, res) => {
-    res.writeHead(200, {
-        'Content-Type': 'application/x-ns-proxy-autoconfig',
-        "Content-Disposition": "attachment;filename=\"abe.pac\""
-    });
-    res.end(`
-function FindProxyForURL(url, host)
-{
-    if (dnsDomainIs(host, "abehiroshi.la.coocan.jp"))
-        return "PROXY localhost:3003";
-    else
-        return "DIRECT";
-}
-`);
+    if(req.url.startsWith("/delay/")) {
+        // req.urlから/delay/:numberの:number部分を取り出す
+        DELAY_PER_BYTE = Number(req.url.split('/delay/')[1]);
+        res.writeHead(200, {});
+        res.end(`changing DELAY_PER_BYTE is succeed`);
+        return;
+    }
+
+    if(req.url === "/abe.pac") {
+        res.writeHead(200, {
+            'Content-Type': 'application/x-ns-proxy-autoconfig',
+            "Content-Disposition": "attachment;filename=\"abe.pac\""
+        });
+        res.end(`
+            function FindProxyForURL(url, host)
+            {
+                if (dnsDomainIs(host, "abehiroshi.la.coocan.jp"))
+                return "PROXY localhost:3003";
+                else
+                return "DIRECT";
+            }
+        `);
+        return;
+    }
 });
 
 proxy.listen(3003);
