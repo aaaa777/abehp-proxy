@@ -36,13 +36,13 @@ const mutexRelease = () => mutex = false;
 const writeSocketSlowly = async (socket, buffer, callback) => {
     let i = 0;
     while(buffer.length > i) {
-        socket.write(buffer.slice(i, i + 1));
         console.debug(`socket write: ${buffer.slice(i, i + 1)}`);
         await sleepMsec(DELAY_PER_BYTE);
         if(callback()) {
-            console.log('session aborted');
-            return; 
+            console.info('[Proxy] session aborted');
+            break;
         }
+        socket.write(buffer.slice(i, i + 1));
         i++;
     }
     // TOTAL_BYTES += buffer.length;
@@ -59,7 +59,7 @@ const proxy = http.createServer(async (req, res) => {
         
     await mutexAwait();
 
-    console.log('proxying ' + req.url);
+    console.info('[Proxy] proxying ' + req.url);
 
     const serverUrl = url.parse(req.url);
     const resSocket = res.socket;
@@ -143,15 +143,11 @@ const proxy = http.createServer(async (req, res) => {
 
         console.debug(headers);
         
-        // res.writeHead(resCode, headers);
-        // resSocket.write(`HTTP/1.1 ${resCode} ${headers['Server']}\r\n`);
         await writeSocketSlowly(resSocket, Buffer.from(`HTTP/1.1 ${resCode} ${headers['Server']}\r\n`), isReqSocketEnd);
         for (const h in headers) {
-            // resSocket.write(`${h}: ${headers[h]}\r\n`);
             await writeSocketSlowly(resSocket, Buffer.from(`${h}: ${headers[h]}\r\n`), isReqSocketEnd);
         }
         await writeSocketSlowly(resSocket, Buffer.from('\r\n'), isReqSocketEnd);
-        // resSocket.write('\r\n');
 
         // ヘッダーの後ろにあるボディを取得
         const responseBody = buffer.slice(delimiterCount);
@@ -160,13 +156,6 @@ const proxy = http.createServer(async (req, res) => {
         
         // レスポンスボディを一文字ずつ転送
         await writeSocketSlowly(resSocket, responseBody, isReqSocketEnd);
-        // let i = 0;
-        // while(responseBody.length > i) {
-        //     resSocket.write(responseBody.slice(i, i + 1));
-        //     // console.debug(responseBody.slice(i, i + 1));
-        //     // await sleep(0.0001);
-        //     i += 1;
-        // };
         resSocket.end();
 
         mutexRelease();
@@ -204,6 +193,7 @@ const pacServer = http.createServer((req, res) => {
         DELAY_PER_BYTE = Number(req.url.split('/delay/')[1]);
         res.writeHead(200, {});
         res.end(`changing DELAY_PER_BYTE is succeed`);
+        console.info('[Proxy] DELAY_PER_BYTE set: ' + DELAY_PER_BYTE);
         return;
     }
 
