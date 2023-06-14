@@ -15,6 +15,7 @@ const PROXY_MSPB = ESTIMATED_TIME_MSEC / TOTAL_BITS;
 
 var DELAY_PER_BYTE = PROXY_MSPB * 8;
 var mutex = false;
+const pageCache = {};
 
 console.info('[Proxy] ESTIMATED_TIME_MSEC set: ' + ESTIMATED_TIME_MSEC);
 console.info('[Proxy] DELAY_PER_BYTE set: ' + DELAY_PER_BYTE);
@@ -33,12 +34,12 @@ const mutexAwait = async () => {
 const mutexRelease = () => mutex = false;
 
 
-const writeSocketSlowly = async (socket, buffer, callback) => {
+const writeSocketSlowly = async (socket, buffer, isSessionEnded) => {
     let i = 0;
     while(buffer.length > i) {
         console.debug(`socket write: ${buffer.slice(i, i + 1)}`);
         await sleepMsec(DELAY_PER_BYTE);
-        if(callback()) {
+        if(isSessionEnded()) {
             console.info('[Proxy] session aborted');
             break;
         }
@@ -65,11 +66,19 @@ const proxy = http.createServer(async (req, res) => {
     const resSocket = res.socket;
     
     // proxy logic
+    if(pageCache[serverUrl.href]) {
+        console.info('[Proxy] cache hit');
+        await writeSocketSlowly(resSocket, pageCache[serverUrl.href], () => req.socket.destroyed);
+        resSocket.end();
+        mutexRelease();
+        return;
+    }
+
     const proxySocket = net.connect(80, 'abehiroshi.la.coocan.jp', async () => {
         
         let reqSocketStat = false;
         const isReqSocketEnd = () => reqSocketStat;
-        req.socket.on('end', () => reqSocketStat = true);
+        req.socket.on('end', () => req.socket.destroyed);
 
         // proxy -> client
         // proxySocket.pipe(cliSocket);
@@ -83,6 +92,7 @@ const proxy = http.createServer(async (req, res) => {
         })
 
         const buffer = Buffer.concat(chunks);
+        pageCache[serverUrl.href] = buffer;
         
         console.debug(buffer.toString());
 
@@ -142,6 +152,7 @@ const proxy = http.createServer(async (req, res) => {
         });
 
         console.debug(headers);
+
         
         await writeSocketSlowly(resSocket, Buffer.from(`HTTP/1.1 ${resCode} ${headers['Server']}\r\n`), isReqSocketEnd);
         for (const h in headers) {
