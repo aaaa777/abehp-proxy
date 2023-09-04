@@ -1,6 +1,0 @@
-HTTP/1.1 200 OK
-Content-Type: text/html
-
-<!DOCTYPE html>
-<html>
-<body>
