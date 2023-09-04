@@ -41,6 +41,7 @@ The specified URL is `http://localhost:3002/abe.pac`
 
 When accessing `http://www.example.com/`, the proxy server
 Displayed via
+*It takes about 30 minutes to display completely with default settings.
 *In some cases, it may take several minutes to start being displayed, so
 Try leaving it for a while.
 
@@ -57,7 +58,7 @@ none
 
 Extension library and data used
 ----------------------------------------
-*Name: Wrote an http proxy server with https support in Node.js in his 80 lines
+* Name: I wrote an http proxy server that supports https in Node.js in 80 lines.
      + Description: Proxy server implementation example written in 80 lines
      + Where to get: https://qiita.com/LightSpeedC/items/5c1edc2c974206c743f4
      + Use: Used as a reference for HTTPS proxy implementation example
