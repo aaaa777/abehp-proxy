@@ -3,12 +3,12 @@ const url  = require('url');
 const net = require('net');
 
 
-const TOTAL_BYTES = 38471;
+const TOTAL_BYTES = 1000;
 const TOTAL_BITS = TOTAL_BYTES * 8;
 const TOTAL_BODY_BYTES = 37257;
 const TOTAL_HEADER_BYTES = TOTAL_BYTES - TOTAL_BODY_BYTES;
 
-var ESTIMATED_TIME_MSEC = 50;// * 60 * 1000;
+var ESTIMATED_TIME_MSEC = 10 * 60 * 1000;
 var ESTIMATED_TIME_SEC = ESTIMATED_TIME_MSEC / 1000;
 const PROXY_BPMS = TOTAL_BITS / ESTIMATED_TIME_MSEC;
 const PROXY_MSPB = ESTIMATED_TIME_MSEC / TOTAL_BITS;
@@ -30,7 +30,7 @@ if(process.argv.length >= 3) {
 console.info('[Proxy] proxy target domain is: ' + proxyTargetDomain);
 console.info('[Proxy] ESTIMATED_TIME_MSEC set: ' + ESTIMATED_TIME_MSEC);
 console.info('[Proxy] DELAY_PER_BYTE set: ' + DELAY_PER_BYTE);
-console.info('[Proxy] Proxy virtual bps is about: ' + Math.round((TOTAL_BYTES * 41 * 8) / ESTIMATED_TIME_SEC) + ' bits/sec');
+console.info('[Proxy] Proxy virtual bps is set about: ' + Math.round((TOTAL_BYTES * 41 * 8) / ESTIMATED_TIME_SEC) + ' bits/sec');
 
 /**
  * sleep sec
@@ -74,10 +74,10 @@ const mutexRelease = (key="global") => mutex[key] = false;
  * @param {function} isSessionEnded check whe
  */ 
 const writeSocketSlowly = async (socket, buffer, isSessionEnded) => {
-    // console.log("start writeSocketSlowly");
+    console.log("start writeSocketSlowly");
     let i = 0;
     while(buffer.length > i) {
-        //console.debug(`socket write: ${buffer.slice(i, i + BYTE_MULTIPLIER)}`);
+        console.debug(`socket write: ${buffer.slice(i, i + BYTE_MULTIPLIER)}`);
         await sleepMsec(DELAY_PER_BYTE);
         if(isSessionEnded()) {
             console.info('[Proxy] session aborted');
@@ -140,7 +140,7 @@ const proxy = http.createServer(async (req, res) => {
         const buffer = Buffer.concat(chunks);
         pageCache[serverUrl.href] = buffer;
         
-        console.log('[http://' + serverUrl.hostname + "] " + buffer.toString());
+        // console.log('[http://' + serverUrl.hostname + "] " + buffer.toString());
 
         // レスポンスボディの先頭にあるヘッダーとボディを分離する
         // split response body and header
