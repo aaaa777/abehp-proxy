@@ -13,7 +13,7 @@ var ESTIMATED_TIME_SEC = ESTIMATED_TIME_MSEC / 1000;
 const PROXY_BPMS = TOTAL_BITS / ESTIMATED_TIME_MSEC;
 const PROXY_MSPB = ESTIMATED_TIME_MSEC / TOTAL_BITS;
 
-const BYTE_MULTIPLIER = 40;
+const BYTE_MULTIPLIER = 1;
 
 var DELAY_PER_BYTE = PROXY_MSPB * 8;
 const pageCache = {};
@@ -21,7 +21,8 @@ var mutex = {"global":false};
 var mutexQueue = {"global":[]};
 
 // コマンドの引数によって変更する
-var proxyTargetDomain = "abehiroshi.la.coocan.jp";
+// set proxy target domain
+var proxyTargetDomain = "www.example.com";
 if(process.argv.length >= 3) {
     proxyTargetDomain = process.argv[2];
 }
@@ -94,6 +95,7 @@ const writeSocketSlowly = async (socket, buffer, isSessionEnded) => {
 const proxy = http.createServer(async (req, res) => {
 
     // Mutex待ち
+    // lock mutex
     await mutexAwait();
 
     const serverUrl = url.parse(req.url);
@@ -102,6 +104,7 @@ const proxy = http.createServer(async (req, res) => {
     const resSocket = res.socket;
     
     // キャッシュがあればそれを返す
+    // return cache if exists
     if(pageCache[serverUrl.href]) {
         console.log('[http://' + serverUrl.hostname + '] cache hit');
         await writeSocketSlowly(resSocket, pageCache[serverUrl.href], () => req.socket.destroyed);
@@ -111,6 +114,7 @@ const proxy = http.createServer(async (req, res) => {
     }
 
     // TCPでサーバに接続
+    // connect to server with TCP
     const proxySocket = net.connect(80, serverUrl.host, async () => {
         
         console.log('[http://' + serverUrl.hostname + "] proxy conn established");
@@ -119,10 +123,10 @@ const proxy = http.createServer(async (req, res) => {
         req.socket.on('end', () => req.socket.destroyed);
 
         // proxy -> client
-        // proxySocket.pipe(req.socket);
-        // req.socket.pipe(proxySocket);
         console.log('[http://' + serverUrl.hostname + "] writing http request header");
-        // HPからのレスポンスをawaitで待つ
+
+        // Webサーバからのレスポンスをawaitで待つ
+        // await response from Web server
         const chunks = await new Promise((resolve, reject) => {
             const chunks = []
             proxySocket.on('data', (chunk) => chunks.push(Uint8Array.from(chunk)));
@@ -131,15 +135,19 @@ const proxy = http.createServer(async (req, res) => {
         });
         console.log("[http://" + serverUrl.hostname + "] data arrived: " + chunks.length + "bytes");
 
+        // レスポンスボディをキャッシュ
+        // cache response body
         const buffer = Buffer.concat(chunks);
         pageCache[serverUrl.href] = buffer;
         
         console.log('[http://' + serverUrl.hostname + "] " + buffer.toString());
 
         // レスポンスボディの先頭にあるヘッダーとボディを分離する
+        // split response body and header
         const rawResponseArray = Uint8Array.from(buffer);
 
         // HTTPヘッダとボディの境目であるCRLFCRLFを一文字ずつ探す
+        // search CRLFCRLF which is the boundary of HTTP header and body
         let lastCharIsCR = false;
         let lastCharIsLF = false;
         let lastCharIsCRLF = false;
@@ -149,60 +157,75 @@ const proxy = http.createServer(async (req, res) => {
         rawResponseArray.forEach((c) => {
             
             // CRLFCRLFが見つかったら以後のループ全てreturn
+            // return if CRLFCRLF is found
             if (lastCharIsCRLFCRLF) {
                 return;
             }
 
             // CRLFCRLFが見つかるまでの文字数をカウント
+            // count characters until CRLFCRLF is found
             delimiterCount++;
 
             // CRが見つかった場合
+            // if CR is found
             if (c === 0x0d) {
                 // CRの前がCRLFならCRLFCRが見つかったとして、フラグを立てる
+                // if the character before CR is CRLF, set flag
                 if (lastCharIsLF) {
                     lastCharIsCRLF = true;
                     return;
                 }
                 // CRLFでなければCRが見つかったとして、フラグを立てる
+                // if the character before CR is not CRLF, set flag
                 lastCharIsCR = true;
                 return;
             }
 
             // CRの後にLFが見つかった場合
+            // if LF is found after CR
             if (c === 0x0a && lastCharIsCR) {
                 // LFの前がCRLFCRならCRLFCRLFが見つかったとして、フラグを立てる
+                // if the character before LF is CRLFCR, set flag
                 if(lastCharIsCRLF) {
                     lastCharIsCRLFCRLF = true;
                     return;
                 }
                 // CRLFでなければCRLFが見つかったとして、フラグを立てる
+                // if the character before LF is not CRLF, set flag
                 lastCharIsLF = true;
                 return;
             }
 
             // マッチしなかった場合はフラグをリセット
+            // reset flags if no match
             lastCharIsCR = false;
             lastCharIsLF = false;
             lastCharIsCRLF = false;
         });
 
         // ヘッダーを取得
+        // get header
         const abeSiteResponseHead = buffer.toString('latin1').split('\r\n\r\n')[0];
 
         // ヘッダーを転送
+        // transfer header
         const headers = {};
         let resCode = 500;
         abeSiteResponseHead.split('\r\n').forEach((line) => {
+
             // レスポンスコードの行は無視
+            // ignore response code line
             if(line.match(/HTTP\/1\.[01] [0-9]{3} .+/)) {
                 resCode = line.split(' ')[1];
                 return;
             }
             // 空白行は無視
+            // ignore blank line
             if(line === '') {
                 return;
             }
-            // エンコードがshift
+            // ヘッダーをオブジェクトに変換
+            // convert header to object
             headers[line.split(': ')[0]] = line.split(': ')[1];
         });
 
@@ -210,37 +233,45 @@ const proxy = http.createServer(async (req, res) => {
         console.log('[http://' + serverUrl.hostname + "] writing http response header");
         
         // HTTPレスポンスヘッダ1行目を一文字ずつ転送
+        // transfer HTTP response header first line
         await writeSocketSlowly(resSocket, Buffer.from(`HTTP/1.1 ${resCode} ${headers['Server']}\r\n`), isReqSocketEnd);
         
         // HTTPレスポンスヘッダ2行目以降を一文字ずつ転送
+        // transfer HTTP response header second line and after
         for (const h in headers) {
             await writeSocketSlowly(resSocket, Buffer.from(`${h}: ${headers[h]}\r\n`), isReqSocketEnd);
         }
 
         // ヘッダーとボディの境目のCRLFを一文字ずつ転送
+        // transfer CRLF which is the boundary of header and body
         await writeSocketSlowly(resSocket, Buffer.from('\r\n'), isReqSocketEnd);
 
         // ヘッダーの後ろにあるボディを取得
+        // get body after header
         const responseBody = buffer.slice(delimiterCount);
         // console.debug(responseBody);
         // console.debug(responseBody.length);
         
         
         // レスポンスボディを一文字ずつ転送
+        // transfer response body
         console.log('[http://' + serverUrl.hostname + "] writing http response body");
         await writeSocketSlowly(resSocket, responseBody, isReqSocketEnd);
         resSocket.end();
 
         // Mutex解除
+        // release mutex
         mutexRelease();
         
         // エラーハンドリング
+        // error handling
     }).on('error', (err) => {
         console.debug(err);
         mutexRelease();
         // res.end();
         
         // タイムアウトハンドリング
+        // timeout handling
     }).on('timeout', (err) => {
         console.debug(err);
         mutexRelease();
@@ -249,10 +280,12 @@ const proxy = http.createServer(async (req, res) => {
 
     // client -> proxy
     // HTTPリクエストの送信
+    // send HTTP request
     proxySocket.write(`${req.method} ${serverUrl.path} HTTP/${req.httpVersion}\r\n`);
     console.log(`${req.method} ${serverUrl.path} HTTP/${req.httpVersion}\r\n`);
     for (const h in req.headers) {
         // キャッシュ系のヘッダーは無視
+        // ignore cache headers
         if(h.startsWith('If-Modified-Since')) {
             continue;
         }
@@ -285,12 +318,15 @@ proxy.on('connect', async (cliReq, cliSoc, cliHead) => {
     }
     
     // 読み込みチャンクのキュー
+    // queue of chunks
     let chunks = [];
 
     // 非同期読み込みのロック
+    // lock of async read
     let cliSocLock = false;
     
     // TCP確立まで行う
+    // connect to server with TCP
     svrSoc = net.connect(x.port || 443, x.hostname, function onSvrConn() {
         console.log("[https://" + x.hostname + "] proxy conn established");
         cliSoc.write('HTTP/1.0 200 Connection established\r\n\r\n');
@@ -298,6 +334,7 @@ proxy.on('connect', async (cliReq, cliSoc, cliHead) => {
         cliSoc.pipe(svrSoc);
 
     // データがサーバーから来た時、チャンクをキューに追加
+    // add chunk to queue when data is received from server
     }).on("data", async (chunk) => {
         console.log("[https://" + x.hostname + "] data arrived: " + chunk.length + "bytes");
         chunks.push(chunk);
@@ -320,12 +357,14 @@ proxy.on('connect', async (cliReq, cliSoc, cliHead) => {
     //svrSoc.pipe(cliSoc);
 
     // サーバ側エラーハンドル
+    // server side error handling
     svrSoc.on('error', err => {
         console.log("[" + x.hostname + "] error code" + err.code);
         chunks = [];
     });
     
     // クライアント側エラーハンドル
+    // client side error handling
     cliSoc.on('error', err => {
         chunks = [];
         console.log("[" + x.hostname + "] error code" + err.code);
@@ -334,11 +373,14 @@ proxy.on('connect', async (cliReq, cliSoc, cliHead) => {
 
 
 // pacファイル配信用サーバ
+// server for pac file
 const pacServer = http.createServer(async (req, res) => {
 
     // delayパラメータ
+    // delay parameter
     if(req.url.startsWith("/delay/")) {
         // req.urlから/delay/:numberの:number部分を取り出す
+        // get :number part from req.url
         DELAY_PER_BYTE = Number(req.url.split('/delay/')[1]);
         res.writeHead(200, {});
         res.end(`changing DELAY_PER_BYTE is succeed`);
@@ -347,6 +389,7 @@ const pacServer = http.createServer(async (req, res) => {
     }
 
     // 設定ファイルの場所
+    // location of setting file
     if(req.url === "/abe.pac") {
         res.writeHead(200, {
             'Content-Type': 'application/x-ns-proxy-autoconfig',
@@ -368,5 +411,6 @@ const pacServer = http.createServer(async (req, res) => {
 
 
 // サーバの起動
+// start server
 proxy.listen(3003);
 pacServer.listen(3002);

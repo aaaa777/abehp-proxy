@@ -57,6 +57,11 @@ npm run start www.example.com
 
 利用した拡張ライブラリ，およびデータ
 ----------------------------------------
+* 名前：Node.js で https をサポートする http proxy サーバを 80行で書いた
+    + 説明：80行で書かれたプロキシサーバの実装例
+    + 入手場所：https://qiita.com/LightSpeedC/items/5c1edc2c974206c743f4
+    + 用途：HTTPSのプロキシ実装例の参考にした
+
 
 * 名前：[nodejs] A simple example how to write a proxy server piping server request to client request / client response back to server response.
     + 説明：シンプルなプロキシの実装例
@@ -95,6 +100,12 @@ DOMツリーを構築しながら並列にリクエストする．
 一つ一つ処理して読み込み時間を長くしている．
 また，ブラウザがWebサイトをキャッシュしないようにするためにHTTPヘッダの書き換えも行う．
 HTTPS通信の場合はHTTPヘッダの書き換えは行えないため，ブラウザ側でキャッシュを無効にする必要がある．
+
+いくつかの定数を変更することで通信速度を変更できる．
+BYTE_MULTIPLIERは一度に送信するバイト数を指定できる．
+DELAY_PER_BYTEは一文字送信するのにかかる時間を指定できる．
+TOTAL_BYTESにサイトのバイト数、ESTIMATE_TIME_MSECに表示にかかる時間を指定すると，
+自動的に適切なDELAY_PER_BYTEが設定される．
 
 
 * 技術要素
