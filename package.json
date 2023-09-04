@@ -1,16 +1,11 @@
 {
-    "name": "abe-proxy",
+    "name": "ultra-narrowband-proxy",
     "version": "0.0.1",
-    "description": "Abe proxy",
+    "description": "ultra-narrowband proxy",
     "main": "index.js",
     "scripts": {
         "start": "node index.js"
     },
     "author": "aaaa777",
-    "license": "MIT",
-    "dependencies": {
-        "body-parser": "^1.15.0",
-        "express": "^4.13.4",
-        "iconv-lite": "^0.6.3"
-    }
+    "license": "MIT"
 }
